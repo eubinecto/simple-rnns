@@ -141,7 +141,7 @@ class SentimentAnalyzer:
         self.tokenizer = tokenizer
 
     def __call__(self, text: str) -> float:
-        X = build_X(sents=[text],tokenizer=self.tokenizer)
+        X = build_X(sents=[text], tokenizer=self.tokenizer)
         Ht = self.rnn.forward(X)
         Hy = self.rnn.W_hy(Ht)
         Hy_normalized = torch.sigmoid(Hy)
@@ -167,7 +167,7 @@ def main():
     X = build_X(sents, tokenizer)
     y = build_y(labels)
     dataset = SimpleDataset(X, y)  # 파이토치 데이터 셋에 텐서를 저장.
-    dataloader = DataLoader(dataset=dataset, batch_size=5, shuffle=True)
+    dataloader = DataLoader(dataset=dataset, batch_size=3, shuffle=True)
 
     # 모델 만들기
     vocab_size = len(tokenizer.word_index) # 정수 1부터 부여.
@@ -178,7 +178,7 @@ def main():
     optimizer = torch.optim.Adam(params=rnn.parameters(), lr=0.001)
 
     # 에폭 루프
-    for e_idx in range(200):
+    for e_idx in range(300):
         # 배치루프
         losses = list()
         for b_idx, batch in enumerate(dataloader):
@@ -186,19 +186,20 @@ def main():
             # 영성님 - 학습을 해주어야 한다.
             # 그럼 무엇을 계산해야하는가
             loss: torch.Tensor = rnn.training_step(X, y)
+            optimizer.zero_grad()
             loss.backward()  # 오차역전파 (모든 기울기를 다 계산)
             # 가중치를 경사도 하강법을 업데이트
             optimizer.step()
             # 기울기가 축적이 되는 것을 방지하기 위해 리셋
-            optimizer.zero_grad()
             losses.append(loss.item())
         avg_loss = (sum(losses) / len(losses))
         print("epoch:{}, avg_loss:{}".format(e_idx, avg_loss))
 
-        analyser = SentimentAnalyzer(rnn, tokenizer)
+    analyser = SentimentAnalyzer(rnn, tokenizer)
+    print("####-------- inferece ---- -#####")
+    print(analyser(text="오늘 날씨가 좋다")) # 0.93의 확률로 출력!
 
-        print("####-------- inferece ---- -#####")
-        print(analyser(text="오늘 날씨가 좋다"))
+
 
 
 if __name__ == '__main__':
