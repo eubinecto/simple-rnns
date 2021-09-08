@@ -200,8 +200,6 @@ def main():
     print(analyser(text="오늘 날씨가 좋다")) # 0.93의 확률로 출력!
 
 
-
-
 if __name__ == '__main__':
     main()
 

@@ -3,8 +3,8 @@ from keras_preprocessing.sequence import pad_sequences
 
 def main():
     data = [
-        [1, 2  , 3],
-        [1, 2, 3 , 4],
+        [1, 2, 3],
+        [1, 2, 3, 4],
         [1]
     ]
     # 아, padding = 'pre' 일때는 앞부분에 붙는구나.
