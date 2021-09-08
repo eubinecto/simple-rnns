@@ -2,7 +2,7 @@ import torch
 
 
 def main():
-    print(torch.zeros(size=(4,3)))
+    print(torch.zeros(size=(4, 3)))
 
 
 
