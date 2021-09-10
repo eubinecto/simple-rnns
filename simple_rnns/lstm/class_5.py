@@ -11,7 +11,8 @@ from torch.nn import functional as F
 
 DATA: List[Tuple[str, int]] = [
     # 긍정적인 문장 - 1
-    # ("나는 자연어처리", 1),
+    ("나는 자연어처리가 좋아", 1),
+    ("나는 자연어처리", 1),
     ("도움이 되었으면", 1),
     # 병국님
     ("오늘도 수고했어", 1),
@@ -82,7 +83,7 @@ DATA: List[Tuple[str, int]] = [
     # 진환님
     ("잘도 그러겠다", 0),
     ("너는 어렵다", 0),
-    ("자연어처리는", 0)
+    # ("자연어처리는", 0)
 ]
 
 
@@ -116,15 +117,61 @@ class SimpleLSTM(torch.nn.Module):
         # 우선, 학습해야하는 가중치는 이 둘이다.
         self.E = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
         # 학습해야하는 가중치.
+        # 학습해야하는 신경망을 다 정의해보자.
+        # 1. 정의를 하는 것 스킵
+        # 2. forward에서 데이터의 흐름을 *차원의 변화를 트래킹*하면서 확인
+        # 3. (A, B) * (B, C) -> (A, C)
+        # self.W_f = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size)  # (?, ?)
+        # self.W_i = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size)  # (?, ?)
+        # self.W_o = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size)  # (?, ?)
+        # self.W_h_temp = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size)  # (?, ?)
+        self.W = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size*4)
+        self.W_hy = torch.nn.Linear(in_features=hidden_size, out_features=1)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
+        h_t = f_W(h_t-1, xt)
         :param X: (N, L) = (배치의 크기, 문장의 길이)
         :return: H_last (N, H)
         """
         # TODO:
         ...
-        H_last: torch.Tensor = ...
+        # 이제 뭐해요?
+        # 반복문
+        # 0 -> ???=L-1
+        C_t = torch.zeros(size=(X.shape[0], self.hidden_size))  # (?=N, ?=H)
+        H_t = torch.zeros(size=(X.shape[0], self.hidden_size))  # (?=N, ?=H)
+        for time in range(X.shape[1]):
+            # 여기선 뭐하죠?
+            X_t = X[:, time]  # (N, L) -> (N, 1)
+            X_t = self.E(X_t)  # (N, 1) -> (N, E)
+            # 이제 뭐하죠?
+            H_cat_X = torch.cat([H_t, X_t], dim=1)  # (N, H), (N, E) -> (?=N,?=H+E)
+            # 성분곱, 성분덧셈만을 해서 H_t를 구해야하므로, F,O, I, G는전부 (N, H)
+            # F = self.W_f(H_cat_X)  # (N, H +E) * (?=H+E, ?=H) = (?=N, ?=H)
+            # I = self.W_i(H_cat_X)  # (N, H +E) * (?=H+E, ?=H) = (?=N, ?=H)
+            # O = self.W_o(H_cat_X)  # (N, H +E) * (?=H+E, ?=H) = (?=N, ?=H)
+            # H_temp = self.W_h_temp(H_cat_X)  # (N, H +E) * (?=H+E, ?=H) = (?=N, ?=H)
+            G = self.W(H_cat_X)  # (N, H+E) * (H+E, H*4) -> (N, H*4)
+            F = G[:, :self.hidden_size]  # 큰 박스 안에 작은 박스를 넣는다.
+            I = G[:, self.hidden_size:self.hidden_size*2]  # 큰 박스 안에 작은 박스를 넣는다.
+            O = G[:, self.hidden_size*2:self.hidden_size*3]  # 큰 박스 안에 작은 박스를 넣는다.
+            H_temp = G[:, self.hidden_size*3:self.hidden_size*4]  # 큰 박스 안에 작은 박스를 넣는다.
+
+            # 이제 뭐하죠? - 활성화 함수,
+            F = torch.sigmoid(F)  #  (N ,H) -> (N, H)
+            I = torch.sigmoid(I)  #  (N ,H) -> (N, H)
+            O = torch.sigmoid(O)  #  (N ,H) -> (N, H)
+            H_temp = torch.tanh(H_temp)  #  (N ,H) -> (N, H)
+
+            # 이제 뭐하죠?
+            # 1. F의 용도? = 지우개
+            # 2. I의 용도? = 필요한 기억 저장
+            # 3. O의 용도? = 장기기억으로 부터 최종 단기기억 생성
+            C_t = torch.mul(F, C_t) + torch.mul(I, H_temp)
+            H_t = torch.mul(O, torch.tanh(C_t))
+        # 마지막 시간대의 hidden state.
+        H_last: torch.Tensor = H_t
         return H_last
 
     def predict(self, X: torch.Tensor) -> torch.Tensor:
@@ -137,6 +184,7 @@ class SimpleLSTM(torch.nn.Module):
     def training_step(self, X: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         y_pred = self.predict(X)  # (N, L) -> (N, 1)
         y_pred = torch.reshape(y_pred, y.shape)  # y와 차원의 크기를 동기화
+        print(y_pred)
         loss = F.binary_cross_entropy(y_pred, y)  # 이진분류 로스
         loss = loss.sum()  # 배치 속 모든 데이터 샘플에 대한 로스를 하나로
         return loss
@@ -171,6 +219,7 @@ def main():
 
     vocab_size = len(tokenizer.word_index.keys())
     vocab_size += 1
+    # lstm으로 감성분석 문제를 풀기.
     lstm = SimpleLSTM(vocab_size=vocab_size,hidden_size=HIDDEN_SIZE, embed_size=EMBED_SIZE)
     optimizer = torch.optim.Adam(params=lstm.parameters(), lr=LR)
 
