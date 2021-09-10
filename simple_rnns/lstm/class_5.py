@@ -115,60 +115,16 @@ class SimpleLSTM(torch.nn.Module):
         # 입력.. 출력을 어떻게 해야하나...?
         # 우선, 학습해야하는 가중치는 이 둘이다.
         self.E = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
-        # 학습해야하는 가중치를 정의하는 곳.
-        # # 재용님 - 4개의 신경망.
-        # 1. 일단 스킵.
-        # 2. forward에서 데이터의 흐름을 *차원을 트래킹*하면서 파악하면 됩니다.
-        # 3. (A, B) * (B, C) = (A, C)
-        # self.W_f = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size)  # (?=H +E,?=H)
-        # self.W_i = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size)  # (?,?)
-        # self.W_o = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size)  # (?,?)
-        # self.W_h_temp = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size)  # (?,?)
-        self.W = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size*4)
-        self.W_hy = torch.nn.Linear(in_features=hidden_size, out_features=1)
+        # 학습해야하는 가중치.
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
         :param X: (N, L) = (배치의 크기, 문장의 길이)
         :return: H_last (N, H)
         """
-        # TODO
-        # 그럼 이제 뭐해요?
-        # H_t = f_W(H_t-1, X_t)
-        # 0 부터 어디까지? : 0 부터 L -1 까지.
-        # 이건 H_0.
-        C_t = torch.zeros(size=(X.shape[0], self.hidden_size))  # (N, H)
-        H_t = torch.zeros(size=(X.shape[0], self.hidden_size))  # (N, H)
-        for time in range(X.shape[1]):
-            # 이제 뭐하죠?
-            # 먼저 현재시간대의 정보를 가져오자!
-            X_t = X[:, time]  # (N, L) -> (N, 1)
-            X_t = self.E(X_t)  # (N, 1) -> (N ,E)
-            # H_t-1과 X_t
-            H_cat_X = torch.cat([H_t, X_t], dim=1)  # (N, H), (N, E) -> (N, H + E)
-            # 이제 입력이 준비가 되었으니, 가중치를 곱하자!
-            G = self.W(H_cat_X)  # (N, H + E) * (H +E, H*4) -> (N, H*4) -> GPU 병렬화 가능.
-            # F = self.W_f(H_cat_X)  # (N, H + E) * (?=H+E, ?H) = (N, H)
-            # I = self.W_i(H_cat_X)  # (N, H + E) * (?=H+E, ?H) = (N, H
-            # O = self.W_o(H_cat_X)  # (N, H + E) * (?=H+E, ?H) = (N, H
-            # H_temp = self.W_h_temp(H_cat_X) # (N, H + E) * (?=H+E, ?H) = (N, H
-            F = G[:, :self.hidden_size]
-            I = G[:, self.hidden_size:self.hidden_size*2]
-            O = G[:, self.hidden_size*2:self.hidden_size*3]
-            H_temp = G[:, self.hidden_size*3:self.hidden_size*4]
-            # 문제 -
-            # activation
-            F = torch.sigmoid(F)  # (N, H)
-            # 망각 게이트의 출력값
-            I = torch.sigmoid(I)  # (N, H)
-            O = torch.sigmoid(O)  # (N, H)
-            H_temp = torch.tanh(H_temp)  # (N, H)
-            # 이제 뭐하죠?
-            # 지현님: 현시간대의 장기기억을 생성.
-            C_t = torch.mul(F, C_t) + torch.mul(I, H_temp)  # (N, H)
-            # 이제 뭐하죠?
-            H_t = torch.mul(O, torch.tanh(C_t))  # (N, H)
-        H_last: torch.Tensor = H_t  # (N, H)
+        # TODO:
+        ...
+        H_last: torch.Tensor = ...
         return H_last
 
     def predict(self, X: torch.Tensor) -> torch.Tensor:
@@ -185,8 +141,11 @@ class SimpleLSTM(torch.nn.Module):
         loss = loss.sum()  # 배치 속 모든 데이터 샘플에 대한 로스를 하나로
         return loss
 
-class Analyser:
 
+class Analyser:
+    """
+    lstm기반 감성분석기.
+    """
     def __init__(self, lstm: SimpleLSTM, tokenizer: Tokenizer, max_length: int):
         self.lstm = lstm
         self.tokenizer = tokenizer
@@ -221,7 +180,6 @@ def main():
         optimizer.step()  # 경사도 하강
         optimizer.zero_grad()  #  다음 에폭에서 기울기가 축적이 되지 않도록 리셋
         print(epoch, "-->", loss.item())
-
 
 
     analyser = Analyser(lstm, tokenizer, MAX_LENGTH)
