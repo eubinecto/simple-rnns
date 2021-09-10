@@ -1,12 +1,8 @@
-
-"""
-LSTM을 활용한 감성분석.
-"""
 from typing import List, Tuple
 import torch
-from torch.nn import functional as F
-from keras_preprocessing.text import Tokenizer
 from keras_preprocessing.sequence import pad_sequences
+from keras_preprocessing.text import Tokenizer
+
 
 DATA: List[Tuple[str, int]] = [
     # 긍정적인 문장 - 1
@@ -84,82 +80,6 @@ DATA: List[Tuple[str, int]] = [
     ("자연어처리는", 0)
 ]
 
-TEST_DATA = [
-    ("자연어처리는 재밌어", 1),
-    ("자연어처리는 어렵다", 0),
-    ("이해가 안되네요", 0)
-]
-
-class SimpleLSTM(torch.nn.Module):
-    def __init__(self, vocab_size: int, hidden_size: int, embed_size: int):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.vocab_size = vocab_size
-        self.embed_size = embed_size
-        # 학습해야하는 가중치가 무엇 무엇이 있었나?
-        # 입력.. 출력을 어떻게 해야하나...?
-        # 우선, 학습해야하는 가중치는 이 둘이다.
-        self.E = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
-        # 임베딩 레이어를 학습해야한다.
-        # 학습해야하는 가중치를 정의하는 곳.
-        # 질문 - 또 학습해야하는 가중치?
-        # 이 가중치의 shape를 어떻게 결정?
-        # 1. 가중치를 정의하고, shape를 결정하는 건 스킵.
-        # 2. 데이터의 흐름을 **차원을 트래킹**하면서 체크.
-        # 3. (A, B) * (B, C) -> (A, C).
-        self.W = torch.nn.Linear(in_features=self.hidden_size + self.embed_size, out_features=self.hidden_size*4)  # (?=H+E, ?=H*4)
-        self.W_hy = torch.nn.Linear(in_features=hidden_size, out_features=1)
-        torch.nn.init.xavier_uniform_(self.E.weight)
-        torch.nn.init.xavier_uniform_(self.W.weight)
-        torch.nn.init.xavier_uniform_(self.W_hy.weight)
-
-    def forward(self, X: torch.Tensor) -> torch.Tensor:
-        """
-        :param X: (N, L)
-        :return:
-        """
-        # 이제 뭐해요?
-        # 다운님
-        # (N, L) * (?=L, ?=H) -> (N, H) 이렇게 한방에 되지는 않을 것.
-        # 이전시간대의 장기기억
-        C_t = torch.zeros(size=(X.shape[0], self.hidden_size))  # (N, H)
-        # 이전시간대의 단기기억
-        H_t = torch.zeros(size=(X.shape[0], self.hidden_size))  # (N, H)
-        for time in range(X.shape[1]):
-            pass
-            # 이제 뭐해요?  -> 이전 시간대의 장기 & 단기기억 준비완료.
-            # 이제 X_t가 필요.
-            X_t = X[:, time]  # (N, L) -> (N, 1)
-            # 이제 뭐해요?
-            X_t = self.E(X_t)  # (N, 1) -> (N, E)
-            # 정훈님 - f, i, o, 임시단기기억.
-            H_cat_X = torch.cat([H_t, X_t], dim=1)  # (N, H), (N, E) -> (?=N, ?=H+E)
-            G = self.W(H_cat_X)  # (N, H+E) * (?=H+E, ?=H*4) -> (N, H*4).
-            F = torch.sigmoid(G[:, :self.hidden_size])  # (N, H*4)  -> (N, H)
-            I = torch.sigmoid(G[:, self.hidden_size:self.hidden_size*2])
-            O = torch.sigmoid(G[:, self.hidden_size*2:self.hidden_size*3])
-            H_temp = torch.tanh(G[:, self.hidden_size*3:self.hidden_size*4])
-            # 현시간대의 장기기억?
-            C_t = torch.mul(F, C_t) + torch.mul(O, H_temp)  # 성분곱이니, 차원은 변하지 않는다 (N,H)
-            H_t = torch.mul(O, torch.tanh(C_t))  # -> (N,H)
-        H_last: torch.Tensor = H_t  # (N, H)
-        return H_last
-
-    def predict(self, X: torch.Tensor) -> torch.Tensor:
-        H_t = self.forward(X)  # (N, L) -> (N, H)
-        y_pred = self.W_hy(H_t)  # (N, H) -> (N, 1)
-        y_pred = torch.sigmoid(y_pred)  # (N, H) -> (N, 1)
-        # print(y_pred)
-        return y_pred
-
-
-    def training_step(self, X: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        y_pred = self.predict(X)  # (N, L) -> (N, 1)
-        y_pred = torch.reshape(y_pred, y.shape)  # y와 차원의 크기를 동기화
-        loss = F.binary_cross_entropy(y_pred, y)  # 이진분류 로스
-        loss = loss.sum()  # 배치 속 모든 데이터 샘플에 대한 로스를 하나로
-        return loss
-
 
 # builders #
 def build_X(sents: List[str], tokenizer: Tokenizer, max_length: int) -> torch.Tensor:
@@ -172,6 +92,7 @@ def build_y(labels: List[int]) -> torch.Tensor:
     return torch.FloatTensor(labels)
 
 
+# --- hyper parameters --- #
 EPOCHS = 600
 LR = 0.001
 HIDDEN_SIZE = 32
@@ -179,18 +100,33 @@ EMBED_SIZE = 12
 MAX_LENGTH = 30
 
 
-class Analyser:
+class SimpleLSTM:
+    def __init__(self, vocab_size: int, hidden_size: int, embed_size: int):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.vocab_size = vocab_size
+        self.embed_size = embed_size
+        # 학습해야하는 가중치가 무엇 무엇이 있었나?
+        # 입력.. 출력을 어떻게 해야하나...?
+        # 우선, 학습해야하는 가중치는 이 둘이다.
+        self.E = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
 
-    def __init__(self, lstm: SimpleLSTM, tokenizer: Tokenizer, max_length: int):
-        self.lstm = lstm
-        self.tokenizer = tokenizer
-        self.max_length = max_length
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        pass
 
-    def __call__(self, text: str) -> float:
-        X = build_X(sents=[text], tokenizer=self.tokenizer, max_length=self.max_length)
-        y_pred = self.lstm.predict(X)
-        return y_pred.item()
+    def predict(self, X: torch.Tensor) -> torch.Tensor:
+        H_t = self.forward(X)  # (N, L) -> (N, H)
+        y_pred = self.W_hy(H_t)  # (N, H) -> (N, 1)
+        y_pred = torch.sigmoid(y_pred)  # (N, H) -> (N, 1)
+        # print(y_pred)
+        return y_pred
 
+    def training_step(self, X: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        y_pred = self.predict(X)  # (N, L) -> (N, 1)
+        y_pred = torch.reshape(y_pred, y.shape)  # y와 차원의 크기를 동기화
+        loss = F.binary_cross_entropy(y_pred, y)  # 이진분류 로스
+        loss = loss.sum()  # 배치 속 모든 데이터 샘플에 대한 로스를 하나로
+        return loss
 
 
 def main():
@@ -212,25 +148,3 @@ def main():
         optimizer.step()  # 경사도 하강
         optimizer.zero_grad()  #  다음 에폭에서 기울기가 축적이 되지 않도록 리셋
         print(epoch, "-->", loss.item())
-
-    analyser =Analyser(lstm, tokenizer, MAX_LENGTH)
-
-    print("#### TRAIN TEST ####")
-    # traing accuracy
-    correct = 0
-    total = len(DATA)
-    for sent, y in DATA:
-        y_pred = analyser(sent)
-        if y_pred >= 0.5 and y == 1:
-            correct += 1
-        elif y_pred < 0.5 and y == 0:
-            correct += 1
-    print("training acc:", correct / total)
-
-    print("#### TEST ####")
-    for sent, label in TEST_DATA:
-        print(sent, label, analyser(sent))
-
-
-if __name__ == '__main__':
-    main()
