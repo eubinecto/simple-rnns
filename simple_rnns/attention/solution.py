@@ -1,32 +1,31 @@
 """
-목표  = 감성분석기, LSTM.
-
+목표 = seq2seq.
+with AttentionLSTM
 """
-import copy
 from typing import List, Tuple
 import torch
 from keras_preprocessing.sequence import pad_sequences
 from keras_preprocessing.text import Tokenizer
+from konlpy.tag import Okt
 from torch.nn import functional as F
 import termplotlib as tpl
 
 
-DATA: List[Tuple[str, int]] = [
+DATA: List[Tuple[str, str]] = [
     # 긍정적인 문장 - 1
-    ("나는 너를  좋아해", 1),
-    ("나는 애플이 좋은가", 1),
-    ("나는 사람이 좋더라", 1),
-    ("난 너를 좋아하나", 1),
-    ("나는 너를 싫어헤", 0),
-    ("나는 애플이 싫은가", 0),
-    ("나는 사람이 싫더라", 0),
-    ("난 너를 싫어하나", 0),
-
+    ("나는 너를 좋아해", "I love you"),
 ]
 
 
 # builders #
 def build_X_M(sents: List[str], tokenizer: Tokenizer, max_length: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    for building X and the masks.
+    :param sents:
+    :param tokenizer:
+    :param max_length:
+    :return:
+    """
     seqs = tokenizer.texts_to_sequences(texts=sents)
     seqs = pad_sequences(sequences=seqs, padding="post", maxlen=max_length, value=0)
     X = torch.LongTensor(seqs)  # (N, L)
@@ -38,26 +37,24 @@ def build_y(labels: List[int]) -> torch.Tensor:
     return torch.FloatTensor(labels)
 
 
-
-class SimpleLSTMWithAttention(torch.nn.Module):
+class SimpleLSTM(torch.nn.Module):
+    """
+    LSTM,
+    """
     def __init__(self, vocab_size: int, hidden_size: int, embed_size: int):
         super().__init__()
         self.hidden_size = hidden_size
         self.vocab_size = vocab_size
         self.embed_size = embed_size
+        # 여기에 학습할 가중치들을 정의해두어야.. module.parameters()를 했을 때, 불러 올 수 있다.
         self.E = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
-        # 학습해야하는 가중치.
-        # 학습해야하는 신경망을 다 정의해보자.
-        # 1. 정의를 하는 것 스킵
-        # 2. forward에서 데이터의 흐름을 *차원의 변화를 트래킹*하면서 확인
-        # 3. (A, B) * (B, C) -> (A, C)
         self.W = torch.nn.Linear(in_features=hidden_size + embed_size, out_features=hidden_size*4)
-        self.W_hy = torch.nn.Linear(in_features=hidden_size*2, out_features=1)
 
-    def forward(self, X: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, X: torch.Tensor, H_0: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         h_t = f_W(h_t-1, xt)
         :param X: (N, L) = (배치의 크기, 문장의 길이)
+        :param H_0: (N, H).
         :return: States (N, H*L)
         """
         # TODO:
@@ -66,7 +63,7 @@ class SimpleLSTMWithAttention(torch.nn.Module):
         # 반복문
         # 0 -> ???=L-1
         C_t = torch.zeros(size=(X.shape[0], self.hidden_size))  # (?=N, ?=H)
-        H_t = torch.zeros(size=(X.shape[0], self.hidden_size))  # (?=N, ?=H)
+        H_t = H_0 if H_0 else torch.zeros(size=(X.shape[0], self.hidden_size))  # (?=N, ?=H)
         H_all = torch.zeros(size=(X.shape[0], X.shape[1], self.hidden_size))  # (N, L, H).
         for time in range(X.shape[1]):
             # 여기선 뭐하죠?
@@ -94,53 +91,53 @@ class SimpleLSTMWithAttention(torch.nn.Module):
         H_last = H_t
         return H_all, H_last  # (N, L, H), (N, H).
 
-    def predict(self, X: torch.Tensor, M: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    # def predict(self, X: torch.Tensor, M: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    #     """
+    #     :param X: (N, L) inputs.
+    #     :param M: (N, L) masks.
+    #     """
+    #     # we need .. attention mask.
+    #     H_all, H_last = self.forward(X)  # (N, L) -> (N, L, H),  (N, H).
+    #     S = torch.einsum("nlh,nh->nl", H_all, H_last)  # (N, L, H), (N, H) -> (N, L)
+    #     # mask the scores - we must set this to be negative.
+    #     S[M == 0] = float("-inf")  # masking must be done.
+    #     A = torch.softmax(S, dim=1)  # attention scores.
+    #     C = torch.einsum("nlh,nl->nh", H_all, A)  # (N, L, H), (N, L) -> (N, H).
+    #     y_pred = self.W_hy(torch.cat([C, H_last], dim=1))  # (N, H*2) @ *(H*2, 1) -> (N, 1)
+    #     y_pred = torch.sigmoid(y_pred)  # (N, H) -> (N, 1)
+    #     # print(y_pred)
+    #     return y_pred, A
+
+    # def training_step(self, X: torch.Tensor, M: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    #     y_pred, _ = self.predict(X, M)  # (N, L) -> (N, 1)
+    #     y_pred = torch.reshape(y_pred, y.shape)  # y와 차원의 크기를 동기화
+    #     loss = F.binary_cross_entropy(y_pred, y)  # 이진분류 로스
+    #     loss = loss.sum()  # 배치 속 모든 데이터 샘플에 대한 로스를 하나로
+    #     return loss
+
+
+class SimpleSeq2Seq(torch.nn.Module):
+    def __init__(self, vocab_size: int, hidden_size: int, embed_size:int):
+        super().__init__()
+        # we've got an encoder and a decoder!
+        self.encoder = SimpleLSTM(vocab_size, hidden_size, embed_size)
+        self.decoder = SimpleLSTM(vocab_size, hidden_size, embed_size)
+
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
-        :param X: (N, L) inputs.
-        :param M: (N, L) masks.
+        :param X:
+        :return:
         """
-        # we need .. attention mask.
-        H_all, H_last = self.forward(X)  # (N, L) -> (N, L, H),  (N, H).
-        S = torch.einsum("nlh,nh->nl", H_all, H_last)  # (N, L, H), (N, H) -> (N, L)
-        # mask the scores - we must set this to be negative.
-        S[M == 0] = float("-inf")
-        A = torch.softmax(S, dim=1)  # attention scores.
-        C = torch.einsum("nlh,nl->nh", H_all, A)  # (N, L, H), (N, L) -> (N, H).
-        y_pred = self.W_hy(torch.cat([C, H_last], dim=1))  # (N, H*2) @ *(H*2, 1) -> (N, 1)
-        y_pred = torch.sigmoid(y_pred)  # (N, H) -> (N, 1)
-        # print(y_pred)
-        return y_pred, A
+        pass
 
-    def training_step(self, X: torch.Tensor, M: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        y_pred, _ = self.predict(X, M)  # (N, L) -> (N, 1)
-        y_pred = torch.reshape(y_pred, y.shape)  # y와 차원의 크기를 동기화
-        loss = F.binary_cross_entropy(y_pred, y)  # 이진분류 로스
-        loss = loss.sum()  # 배치 속 모든 데이터 샘플에 대한 로스를 하나로
-        return loss
-
-
-class Analyser:
-    """
-    lstm기반 감성분석기.
-    """
-    def __init__(self, lstm: SimpleLSTMWithAttention, tokenizer: Tokenizer, max_length: int):
-        self.lstm = lstm
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-
-    def __call__(self, text: str) -> float:
-        X, M = build_X_M(sents=[text], tokenizer=self.tokenizer, max_length=self.max_length)
-        y_pred, A = self.lstm.predict(X, M)
-        attentions = A.squeeze().detach().numpy()
-        fig = tpl.figure()
-        tokens = [
-            "[PAD]" if idx == 0
-            else self.tokenizer.index_word[idx]
-            for idx in X.detach().squeeze().tolist()
-        ]
-        fig.barh(vals=attentions, labels=tokens, show_vals=False, force_ascii=False)
-        fig.show()
-        return y_pred.item()
+    def training_step(self, X: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """
+        returns the loss.
+        :param X:
+        :param y:
+        :return:
+        """
+        pass
 
 
 # --- hyper parameters --- #
@@ -166,24 +163,24 @@ def main():
     y = build_y(labels)
     vocab_size = len(tokenizer.word_index.keys())
     vocab_size += 1
-    # lstm으로 감성분석 문제를 풀기.
-    lstm = SimpleLSTMWithAttention(vocab_size=vocab_size,hidden_size=HIDDEN_SIZE, embed_size=EMBED_SIZE)
-    optimizer = torch.optim.Adam(params=lstm.parameters(), lr=LR)
+    # seq2seq로 번역문제 풀기!
+    model = ...
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=LR)
 
     for epoch in range(EPOCHS):
-        loss = lstm.training_step(X, M, y)
+        loss = model.training_step(X, M, y)
         loss.backward()  # 오차 역전파
         optimizer.step()  # 경사도 하강
         optimizer.zero_grad()  #  다음 에폭에서 기울기가 축적이 되지 않도록 리셋
         print(epoch, "-->", loss.item())
 
-    analyser = Analyser(lstm, tokenizer, MAX_LENGTH)
-    print("##### TRAIN TEST #####")
-    for sent, label in DATA:
-        print(sent, "->", label, analyser(sent))
-    print("##### TEST #####")
-    sent = "나는 자연어처리가 좋아"
-    print(sent, "->", analyser(sent))
+    # analyser = Analyser(lstm, tokenizer, MAX_LENGTH)
+    # print("##### TRAIN TEST #####")
+    # for sent, label in DATA:
+    #     print(sent, "->", label, analyser(sent))
+    # print("##### TEST #####")
+    # sent = "나는 자연어처리가 좋아"
+    # print(sent, "->", analyser(sent))
 
 
 if __name__ == '__main__':
