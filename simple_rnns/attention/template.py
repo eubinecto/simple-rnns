@@ -97,7 +97,9 @@ def build_X_M(sents: List[str], tokenizer: Tokenizer, max_length: int) -> Tuple[
     seqs = pad_sequences(sequences=seqs, padding="post", maxlen=max_length, value=0)
     X = torch.LongTensor(seqs)  # (N, L)
     ### TODO 1 ###
-    M = torch.where(X != 0, 1, X)   # 마스크. padding = 0, else = 1   # (N, L)
+    # 마스크 만들기
+    M = ...   # 마스크. padding = 0, else = 1   # (N, L)
+    ##############
     return X, M  # (N, L), (N, L)
 
 
@@ -167,13 +169,15 @@ class SimpleLSTMWithAttention(torch.nn.Module):
         """
         # we need .. attention mask.
         H_all, H_last = self.forward(X)  # (N, L) -> (N, L, H),  (N, H).
-        S = torch.einsum("nlh,nh->nl", H_all, H_last)  # (N, L, H), (N, H) -> (N, L)
+        ### TODO 2 ###
+        S = ...  # (N, L, H), (N, H) -> (N, L)
         # mask the scores - we must set this to be negative.
         S[M == 0] = float("-inf")
-        A = torch.softmax(S, dim=1)  # attention scores.
+        A = ...  # attention scores.
         # compute weighted average to get the context.
-        C = torch.einsum("nlh,nl->nh", H_all, A)  # (N, L, H), (N, L) -> (N, H).
-        C_cat_H = torch.cat([C, H_last], dim=1)
+        C = ...  # (N, L, H), (N, L) -> (N, H).
+        C_cat_H = ...  # (N, H), (N, H) -> (N, H*2)
+        ##############
         y_pred = self.W_hy(C_cat_H)  # (N, H*2) @ *(H*2, 1) -> (N, 1)
         y_pred = torch.sigmoid(y_pred)  # (N, H) -> (N, 1)
         # print(y_pred)
@@ -185,7 +189,6 @@ class SimpleLSTMWithAttention(torch.nn.Module):
         loss = F.binary_cross_entropy(y_pred, y)  # 이진분류 로스
         loss = loss.sum()  # 배치 속 모든 데이터 샘플에 대한 로스를 하나로
         return loss
-
 
 class Analyser:
     """
@@ -236,7 +239,7 @@ def main():
     y = build_y(labels)
     vocab_size = len(tokenizer.word_index.keys())
     vocab_size += 1
-    # lstm으로 감성분석 문제를 풀기.
+    # lstm with attention으로 감성분석 문제를 풀기.
     lstm = SimpleLSTMWithAttention(vocab_size=vocab_size,hidden_size=HIDDEN_SIZE, embed_size=EMBED_SIZE)
     optimizer = torch.optim.Adam(params=lstm.parameters(), lr=LR)
 
