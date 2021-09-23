@@ -1,94 +1,94 @@
 
-import torch
+
+
 from typing import List, Tuple
+import numpy as np
+import torch
 from keras_preprocessing.sequence import pad_sequences
 from keras_preprocessing.text import Tokenizer
+from torch.nn import functional as F
 
 
 class SelfAttention(torch.nn.Module):
+
     def __init__(self, embed_size: int, hidden_size: int):
         super().__init__()
-        self.hidden_size = hidden_size
         self.W_q = torch.nn.Linear(embed_size, hidden_size)
         self.W_k = torch.nn.Linear(embed_size, hidden_size)
         self.W_v = torch.nn.Linear(embed_size, hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
-        """
-        :param X_embed: (N, L, E)
-        :return: H_attn (N, L, H)
-        """
-        # 셀프 어텐션에서는 각 세개의 신경망에 들어가는 입력이 동일하다.
-        Q = self.W_q(X_embed)  # (N, L, E) * (?=E,?=H) -> (N, L, H)
-        K = self.W_k(X_embed)  # (N, L, E) * (?=E,?=H) -> (N, L, H)
-        V = self.W_v(X_embed)  # (N, L, E) * (?=E,?=H) -> (N, L, H)
-        # 이 다음엔 뭘하죠?
-        # Q와 K의 내적.
-        Out = torch.einsum("nah,nbh->nab", Q, K)  # 단어와 단어사이의 관계. -> (N, L, L)
-        Out = Out / torch.sqrt(Out.shape[2])  # 매우 크거나 매우 작은수가 나올 확률을 줄여주는 것.
-        Out = torch.softmax(Out, dim=1)  # [0, 1]사이로  정규화
-        H_attn = torch.einsum("nll,nlh->nlh", Out, V)  # Out(N, L, L), V(N, L, H)  -> (N, L, H)
-        return H_attn
+        Q = self.W_q(X_embed)  #  (N, L, E) * (?=E, ?=H) -> (N, L, H)
+        K = self.W_k(X_embed)
+        V = self.W_v(X_embed)
+        # 다음 - Q * K^T. (N, L, H), (N, L, H) -> (N, L, L)
+        Out = torch.einsum("nah,nbh->nab", Q, K)
+        # scale by sqrt H
+        Out = Out / Q.shape[2]
+        Out = torch.softmax(Out, dim=1)  # across L.
+        # softmax() * V
+        Out = torch.einsum("nll,nlh->nlh", Out, V)  # (N, L, H)
+        return Out
 
 
 class EncoderBlock(torch.nn.Module):
-    def __init__(self, embed_size: int):
+
+    def __init__(self, hidden_size: int):
         super().__init__()
-        self.embed_size = embed_size
-        # 학습해야하는 가중치?
-        # 영성님 - self_attention
-        # position-wise FFN
-        self.sa = SelfAttention(embed_size=embed_size, hidden_size=embed_size)
-        self.ffn = torch.nn.Linear(in_features=embed_size, out_features=embed_size)
+        self.sa = SelfAttention()
+        self.ffn = torch.nn.Linear(hidden_size, hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
         """
         :param X_embed: (N, L, E)
-        :return: (N, L, E)
+        :return:
         """
-        Out = self.sa(X_embed)  # (N, L, E) -> (N, L, E)
-        # L, E * E, E -> L, E.
-        Out = self.ffn(Out)  # (N, L, E) * (?=E,?=E) -> (N, L, E)
+        # 1. self-attention을 통과했을 떄, 어떤 차원의 행렬이 나와야하나?
+        Out = self.sa(X_embed)  # (N, L, E) -> (N, L, H)
+        Out = self.ffn(Out)  # (N, L, H) * (???) - (N, L, H)
         return Out
 
 
 class Transformer(torch.nn.Module):
-    # 1. 신경망 속에 학습해야하는 가중치를 정의하는 메소드.
-    # 2. 신경망의 출력을 계산하는 메소드.
-    # 3. 신경망의 로스를 계산하는 메소드.
+    """
+    Transformer for classifying sequences
+    """
     def __init__(self, vocab_size: int, embed_size: int, depth: int):
+        """
+        :param vocab_size: V
+        :param embed_size: E
+        """
         super().__init__()
-        self.vocab_size = vocab_size
-        # --- 가중치를 정의하는 곳 --- #
-        # 임베딩 테이블 정의
-        self.token_embeddings = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
-        # 인코더 레이어 정의
+        # 가중치를 정의하는 곳.
+        self.embeddings = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
+        # 여러 개 레이어의 나열을 하나의 레이어로 정의하는 방법
+        # list of torch.nn.Module
         self.blocks = torch.nn.Sequential(
-            *[EncoderBlock(embed_size) for _ in range(depth)]
+            *[EncoderBlock() for _ in range(depth)]
         )
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
-        :param X: (N, L)
+        :param X:  (N, L)
         :return:
         """
-        # 정수인코딩 -> 임베딩.
-        X_embed = self.token_embeddings(X)  # (N, L) -> (N, L, E)
-        # torch.nn.Sequential로 정의를 했기 때문에, blocks를 레이어 취급할 수 있다.
-        H_all = self.blocks(X_embed)  # (N, L, E) -> (N, L, E)
-        pass
+        X_embed = self.embeddings(X)  # (N, L) -> (N, L, E)
+        Out = self.blocks(X_embed)
+        ...
+
 
     def training_step(self, X: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        loss: torch.Tensor = ...
-        return loss
+        pass
 
 
+# --- hyper parameters --- #
 EPOCHS = 50
 EMBED_SIZE = 512
 MAX_LENGTH = 30
 NUM_HEADS = 10
 DEPTH = 3
 LR = 0.0001
+
 
 DATA: List[Tuple[str, int]] = [
     # 긍정적인 문장 - 1
