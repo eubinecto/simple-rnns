@@ -128,13 +128,12 @@ class SimpleLSTMWithAttention(torch.nn.Module):
         :param X: (N, L) = (배치의 크기, 문장의 길이)
         :return: States (N, H*L)
         """
-        # TODO:
-        ...
         # 이제 뭐해요?
         # 반복문
         # 0 -> ???=L-1
         C_t = torch.zeros(size=(X.shape[0], self.hidden_size))  # (?=N, ?=H)
         H_t = torch.zeros(size=(X.shape[0], self.hidden_size))  # (?=N, ?=H)
+        ### TODO 2 ###
         H_all = torch.zeros(size=(X.shape[0], X.shape[1], self.hidden_size))  # (N, L, H).
         for time in range(X.shape[1]):
             # 여기선 뭐하죠?
@@ -159,6 +158,8 @@ class SimpleLSTMWithAttention(torch.nn.Module):
             C_t = torch.mul(F, C_t) + torch.mul(I, H_temp)
             H_t = torch.mul(O, torch.tanh(C_t))
             H_all[:, time] = H_t
+        H_all = ...
+        ##############
         H_last = H_t
         return H_all, H_last  # (N, L, H), (N, H).
 
