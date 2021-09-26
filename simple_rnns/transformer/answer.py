@@ -7,42 +7,53 @@ from torch.nn import functional as F
 
 
 class MultiHeadSelfAttention(torch.nn.Module):
-    def __init__(self, embed_size: int, num_heads: int):
+    def __init__(self, embed_size: int, hidden_size: int, num_heads: int):
         super().__init__()
+        self.hidden_size = hidden_size
         self.embed_size = embed_size
         self.num_heads = num_heads
         # 병렬화를 위해, 모든 self-attention
-        self.W_q = torch.nn.Linear(in_features=embed_size, out_features=embed_size * num_heads, bias=False)
-        self.W_k = torch.nn.Linear(in_features=embed_size, out_features=embed_size * num_heads, bias=False)
-        self.W_v = torch.nn.Linear(in_features=embed_size, out_features=embed_size * num_heads, bias=False)
-        self.W_o = torch.nn.Linear(in_features=embed_size * num_heads, out_features=embed_size, bias=False)
+        assert hidden_size % num_heads == 0  # embed_size must be divisible by num_heads.
+        self.W_q = torch.nn.Linear(in_features=embed_size, out_features=hidden_size, bias=False)
+        self.W_k = torch.nn.Linear(in_features=embed_size, out_features=hidden_size, bias=False)
+        self.W_v = torch.nn.Linear(in_features=embed_size, out_features=hidden_size, bias=False)
+        self.W_o = torch.nn.Linear(in_features=hidden_size, out_features=hidden_size, bias=False)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
         :param X: (N, L, E)
         :return: H_all (N, L, E)
         """
-        QW = self.W_q(X)  # (N, L, E) * (E, E* num_heads) -> (N, L, E * num_heads)
-        KW = self.W_k(X)  # (N, L, E) * (E, E* num_heads) -> (N, L, E * num_heads)
-        VW = self.W_v(X)  # (N, L, E) * (E, E* num_heads) -> (N, L, E * num_heads)
+        Q = self.W_q(X)  # (N, L, E) * (E, E) -> (N, L, H)
+        K = self.W_k(X)  # (N, L, E) * (E, E) -> (N, L, H)
+        V = self.W_v(X)  # (N, L, E) * (E, E) -> (N, L, H)
+        # 헤드로 나누기 - 가중치의 역할 = transform into heads.
+        N, L, H = Q.size()
+        Q = Q.reshape(N, self.num_heads, L, H // self.num_heads)  # (N, heads, L,  E / heads)
+        K = K.reshape(N, self.num_heads, L, H // self.num_heads)  # (N, heads, L,  E / heads)
+        V = V.reshape(N, self.num_heads, L, H // self.num_heads)  # (N, heads, L,  E / heads)
+        # scaled
+        Q = Q / np.sqrt(self.hidden_size)
+        K = K / np.sqrt(self.hidden_size)
         # batched matrix multiplication.
-        H_all_ = torch.einsum("nax,nbx->nab", QW, KW)  # (N, L, E * num_heads), (N, L, E * num_heads)  -> (N, L, L)
-        H_all_ = H_all_ / np.sqrt(self.embed_size)
-        H_all_ = torch.softmax(H_all_, dim=1)
-        H_all_ = torch.einsum("nll,nlx->nlx", H_all_, VW)  # (N, L, L), (N, L, E * num_heads) -> (N, L, E * num_heads)
-        H_all = self.W_o(H_all_)  # (N, L, E * num_heads) * (E *num_heads, E) -> (N, L, E)
+        H_all_ = torch.einsum("nhax,nhbx->nhab", Q, K) # (N, heads, L,  H / heads), (N,  heads, L, H / heads)  -> (N, heads, L, L)
+        H_all_ = torch.softmax(H_all_, dim=2)
+        H_all_ = torch.einsum("nhll,nhlx->nhlx", H_all_, V)  # (N, heads, L, L), (N, head , L, H / heads) -> (N, heads, L, H / heads)
+        H_all_ = H_all_.reshape(N, L, H)  # (N, heads, L, H / heads)  -> (N, L, H)
+        H_all = self.W_o(H_all_)  # (N, L, H) * (H, H) -> (N, L, H)
         return H_all
 
 
-class EncoderBlock(torch.nn.Module):
+class EncoderLayer(torch.nn.Module):
 
-    def __init__(self, embed_size: int, num_heads: int, max_length: int):
+    def __init__(self, embed_size: int, hidden_size: int, num_heads: int, max_length: int):
         super().__init__()
         self.embed_size = embed_size
+        self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.max_length = max_length
         # --- layers --- #
-        self.mhsa = MultiHeadSelfAttention(embed_size, num_heads)
+        self.mhsa = MultiHeadSelfAttention(embed_size, hidden_size, num_heads)
         self.norm_1 = torch.nn.LayerNorm(embed_size)
         self.ffn = torch.nn.Sequential(
             torch.nn.Linear(embed_size, 2048),
@@ -67,9 +78,10 @@ class Transformer(torch.nn.Module):
     """
     Transformer for classifying sequences
     """
-    def __init__(self, embed_size, vocab_size, num_heads, depth, max_length):
+    def __init__(self, embed_size,  hidden_size, vocab_size, num_heads, depth, max_length):
         """
         :param embed_size: Embedding dimension
+        :param hidden_size:
         :param vocab_size: Number of tokens (usually words) in the vocabulary
         :param num_heads: nr. of attention heads
         :param depth: Number of transformer blocks
@@ -77,14 +89,15 @@ class Transformer(torch.nn.Module):
         """
         super().__init__()
         # --- hyper parameters --- #
-        self.vocab_size = vocab_size
         self.embed_size = embed_size
+        self.hidden_size = hidden_size
+        self.vocab_size = vocab_size
         # --- embeddings --- #
         self.token_embedding = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
         self.pos_embedding = torch.nn.Embedding(num_embeddings=max_length, embedding_dim=embed_size)
         # --- encoder blocks --- #
         self.blocks = torch.nn.Sequential(*[
-                EncoderBlock(embed_size, num_heads, max_length)
+                EncoderLayer(embed_size, hidden_size, num_heads, max_length)
                 for _ in range(depth)
         ])
         # --- the last layer --- #
@@ -113,10 +126,11 @@ class Transformer(torch.nn.Module):
 
 
 # --- hyper parameters --- #
-EPOCHS = 50
+EPOCHS = 100
 EMBED_SIZE = 512
+HIDDEN_SIZE = 512
 MAX_LENGTH = 30
-NUM_HEADS = 10
+NUM_HEADS = 8
 DEPTH = 3
 LR = 0.0001
 
@@ -246,7 +260,7 @@ def main():
     vocab_size = len(tokenizer.word_index.keys())
     vocab_size += 1
     # lstm 으로 감성분석 문제를 풀기.
-    lstm = Transformer(embed_size=EMBED_SIZE, vocab_size=vocab_size, num_heads=NUM_HEADS, depth=DEPTH, max_length=MAX_LENGTH)
+    lstm = Transformer(embed_size=EMBED_SIZE, hidden_size=HIDDEN_SIZE, vocab_size=vocab_size, num_heads=NUM_HEADS, depth=DEPTH, max_length=MAX_LENGTH)
     optimizer = torch.optim.Adam(params=lstm.parameters(), lr=LR)
     for epoch in range(EPOCHS):
         loss = lstm.training_step(X, y)
