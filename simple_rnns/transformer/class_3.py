@@ -68,8 +68,8 @@ class EncoderBlock(torch.nn.Module):
         :return:
         """
         # 1. self-attention을 통과했을 떄, 어떤 차원의 행렬이 나와야하나?
-        Out = self.sa(X_embed)  # (N, L, E) -> (N, L, H)
-        Out = self.ffn(Out)  # (N, L, H) * (???) - (N, L, H)
+        Out = self.sa(X_embed) + X_embed  # (N, L, E) -> (N, L, H)
+        Out = self.ffn(Out) + Out  # (N, L, H) * (???) - (N, L, H)
         return Out
 
 
