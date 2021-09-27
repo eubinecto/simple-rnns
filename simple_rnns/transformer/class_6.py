@@ -75,6 +75,8 @@ class EncoderBlock(torch.nn.Module):
         super().__init__()
         self.self_attention = MultiHeadSelfAttention(embed_size, hidden_size)
         self.ffn = torch.nn.Linear(hidden_size, hidden_size)
+        self.norm_1 = torch.nn.LayerNorm(hidden_size)
+        self.norm_2 = torch.nn.LayerNorm(hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
         """
@@ -82,9 +84,11 @@ class EncoderBlock(torch.nn.Module):
         :return: (N, L, H)
         """
         # X_embed이 들어오면, 뭐해요?
-        Out_ = self.self_attention(X_embed)  # (N, L, E) -> (N, L, H)
+        Out_ = self.self_attention(X_embed) + X_embed  # (N, L, E) -> (N, L, H)
         # 다음에는 뭐해요?
-        Out = self.ffn(Out_)  # (N, L, H) * (?=H, ?=H) -> (N, L, H)
+        Out_ = self.norm_1(Out_)
+        Out_ = self.ffn(Out_) + Out_  # (N, L, H) * (?=H, ?=H) -> (N, L, H)
+        Out = self.norm_2(Out_)
         return Out
 
 
