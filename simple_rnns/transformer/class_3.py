@@ -9,25 +9,49 @@ from keras_preprocessing.text import Tokenizer
 from torch.nn import functional as F
 
 
-class SelfAttention(torch.nn.Module):
+class MultiHeadSelfAttentionLayer(torch.nn.Module):
 
-    def __init__(self, embed_size: int, hidden_size: int):
+    def __init__(self, embed_size: int, hidden_size: int, heads: int):
         super().__init__()
+        self.heads = heads
+        self.hidden_size = hidden_size
+        assert hidden_size % heads == 0
         self.W_q = torch.nn.Linear(embed_size, hidden_size)
         self.W_k = torch.nn.Linear(embed_size, hidden_size)
         self.W_v = torch.nn.Linear(embed_size, hidden_size)
+        # 학습해야하는 가중치?
+        self.W_o = torch.nn.Linear(hidden_size, hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
         Q = self.W_q(X_embed)  #  (N, L, E) * (?=E, ?=H) -> (N, L, H)
-        K = self.W_k(X_embed)
-        V = self.W_v(X_embed)
+        K = self.W_k(X_embed)  #  (N, L, E) * (?=E, ?=H) -> (N, L, H)
+        V = self.W_v(X_embed)  #  (N, L, E) * (?=E, ?=H) -> (N, L, H)
+        # 이제 뭐해야하나요?
+        # 현재, hidden vector가 N (배치의 크기) * L (문장의 길이) 개 존재.
+        # multihead attention -> hidden vector 의 개수 = (N,  heads, L,  H / heads)
+        N, L, H = Q.size()
+        # 성분의 개수가 동일하므로, 차원의 개수를 늘려서 재배치가 가능.
+        Q = Q.reshape(N, self.heads, L, H // self.heads)  # (N, L, H) ->  (N,  heads, L,  H / heads)
+        K = K.reshape(N, self.heads, L, H // self.heads)  # (N, L, H) ->  (N,  heads, L,  H / heads)
+        V = V.reshape(N, self.heads, L, H // self.heads)  # (N, L, H) ->  (N,  heads, L,  H / heads)
+
         # 다음 - Q * K^T. (N, L, H), (N, L, H) -> (N, L, L)
-        Out = torch.einsum("nah,nbh->nab", Q, K)
+        # Out = torch.einsum("nah,nbh->nab", Q, K)
+        # heads = e
+        # H / heads = x
+        # 유사도 행렬을 구하는 부분.
+        Q = Q / np.sqrt(self.hidden_size)
+        K = K / np.sqrt(self.hidden_size)
+        Out_ = torch.einsum("neax,nebx->neab", Q, K)  # (N,  heads, L,  H / heads) * (N,  heads, L,  H / heads) -> (N ,heads, ?=L, ?=L)
         # scale by sqrt H
-        Out = Out / Q.shape[2]
-        Out = torch.softmax(Out, dim=1)  # across L.
+        # Out_ = Out_ / np.sqrt(self.hidden_size)  # 왜 실수? 논리적인 오류. - 소 잃고 외양간 고치는 격.
+        Out_ = torch.softmax(Out_, dim=2)  #  (N ,heads, ?=L, ?=L)
+        # Out_ = torch.softmax(Out_, dim=3)  #  (N ,heads, ?=L, ?=L) - 이것도 맞음.
         # softmax() * V
-        Out = torch.einsum("nll,nlh->nlh", Out, V)  # (N, L, H)
+        Out_ = torch.einsum("nell,nelx->nelx", Out_, V)  # (N ,heads, ?=L, ?=L), (N,  heads, L,  H / heads) -> (N,  heads, L,  H / heads)
+        Out_ = Out_.reshape(N, L, H)  # (N,  heads, L,  H / heads) ->  (N, L , H / heads * heads=H)
+        # "jointly learning"
+        Out = self.W_o(Out_)  # (N, L, H) * (?=H, ?=H) -> (N, L, H)
         return Out
 
 
@@ -35,7 +59,7 @@ class EncoderBlock(torch.nn.Module):
 
     def __init__(self, hidden_size: int):
         super().__init__()
-        self.sa = SelfAttention()
+        self.sa = MultiHeadSelfAttentionLayer()
         self.ffn = torch.nn.Linear(hidden_size, hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
