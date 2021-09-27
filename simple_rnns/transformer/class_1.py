@@ -71,6 +71,8 @@ class EncoderLayer(torch.nn.Module):
         super().__init__()
         self.multi_head_self_attention_layer = MultiHeadSelfAttentionLayer(embed_size, hidden_size)
         self.ff_layer = torch.nn.Linear(hidden_size, hidden_size)
+        self.norm_1 = torch.nn.LayerNorm(normalized_shape=hidden_size)
+        self.norm_2 = torch.nn.LayerNorm(normalized_shape=hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
         """
@@ -80,7 +82,9 @@ class EncoderLayer(torch.nn.Module):
         # 이제 무ㅏㅓ하죠?
         Out_ = self.multi_head_self_attention_layer(X_embed) + X_embed  # (N, L, E) -> (N, L, H)
         # 이제 뭐하죠?
+        Out_ = self.norm_1(Out_)  # (N, L, H) -> (N, L, H)
         Out = self.ff_layer(Out_) + Out_  # (N, L, H) * (?=H,?=H) -> (N, L, H)
+        Out_ = self.norm_2(Out_) # (N, L, H) -> (N, L, H)
         return Out
 
 
