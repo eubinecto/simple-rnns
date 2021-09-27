@@ -8,14 +8,18 @@ from keras_preprocessing.text import Tokenizer
 from torch.nn import functional as F
 
 
-class SelfAttention(torch.nn.Module):
-    def __init__(self, embed_size: int, hidden_size: int):
+class MultiHeadSelfAttention(torch.nn.Module):
+    def __init__(self, embed_size: int, hidden_size: int, num_heads: int):
         super().__init__()
         self.hidden_size = hidden_size
         self.embed_size = embed_size
+        self.num_heads = num_heads
         self.W_q = torch.nn.Linear(embed_size, hidden_size)
         self.W_k = torch.nn.Linear(embed_size, hidden_size)
         self.W_v = torch.nn.Linear(embed_size, hidden_size)
+        # 새롭게 추가되는 가중치가 있나요?
+        # concat된 피처를 다시 H로 조절해주는 선형변환
+        self.W_o = torch.nn.Linear(hidden_size, hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
         """
@@ -31,18 +35,37 @@ class SelfAttention(torch.nn.Module):
         Q = self.W_q(X_embed)  # (N, L, E) * (?=E, ?=H) -> (N, L, H)
         K = self.W_k(X_embed)  # (N, L, E) * (?=E, ?=H) -> (N, L, H)
         V = self.W_v(X_embed)  # (N, L, E) * (?=E, ?=H) -> (N, L, H)
+        N, L, H = Q.size()
+
+        Q = Q.reshape(N, self.num_heads, L, H // self.num_heads)  # (N, L, H) -> (N, heads, L, H / heads)
+        K = K.reshape(N, self.num_heads, L, H // self.num_heads)  # (N, L, H) -> (N, heads, L, H / heads)
+        V = V.reshape(N, self.num_heads, L, H // self.num_heads)  # (N, L, H) -> (N, heads, L, H / heads)
         # 이제 뭐하죠?
         # Q * K^T
         Q = Q / np.sqrt(self.hidden_size)
         K = K / np.sqrt(self.hidden_size)
-        Out_ = torch.einsum("nah,nbh->nab", Q, K)  # (N, L, H) * (N, L, H)  -> (N, L, L)
+        # Q * K^T
+        # heads = e 로 표기.
+        # H / heads = x로 표기.
+        #  L, L = a, b로 표기.
+        Out_ = torch.einsum("neax,nebx->neab", Q, K)  # (N, heads, L, H / heads) * (N, heads, L, H / heads)  -> (N, heads, L, L)
         # 이제 뭐하죠?
         # Q, K 의 H차원이 커지면 어떤 문제?
         # Out_ = Out_ / np.sqrt(self.hidden_size) -> 순서에 맞지는 않음. 먼저 Q와 K를 scale-down해줘야 한다.
         # 이제 뭐하죠?
-        Out_ = torch.softmax(Out_, dim=1)  # across L  # (N, L, L)
+        # 여기는 어떻게 바뀌어야 할까?
+        # Out_ = torch.softmax(Out_, dim=1)  # across L  # (N, L, L)
+        # Out_ = torch.softmax(Out_, dim=2)  # across L  # (N, L, L)
+        Out_ = torch.softmax(Out_, dim=2)  # across L  # (N, heads,  L, L)
+        # Out_ = torch.softmax(Out_, dim=3)  # across L  # (N, heads,  L, L) - 이것도 가능.
         # 이제 뭐하죠?
-        Out = torch.einsum("nll,nlh->nlh", Out_, V)  # (N, L, L) * (N, L, H) -> (N, L, H)
+        # Out = torch.einsum("nll,nlh->nlh", Out_, V)  # (N,  L, L) * (N, L, H )-> (N, L, H)
+        Out_ = torch.einsum("nell,nelx->nelx", Out_, V)  # (N, heads,  L, L) * (N, heads, L, H / heads)-> (N, heads, L, H / heads)
+        Out_ = Out_.reshape(N, L, H)  # (N, heads, L, H / heads) -> (N, L, H)
+        Out = self.W_o(Out_)  # (N, L, H) * (?=H,?=H) ->(N, L, H)
+        # (H, H) -> N번 복사. -> (N, H, H)
+        # (N, L, H) * (N, H, H) -> (..., L, H) * (..., H, H) ->  (N, L, H)
+        # 끝인가요??
         return Out
 
 
@@ -50,7 +73,7 @@ class EncoderBlock(torch.nn.Module):
 
     def __init__(self, embed_size: int, hidden_size: int):
         super().__init__()
-        self.self_attention = SelfAttention(embed_size, hidden_size)
+        self.self_attention = MultiHeadSelfAttention(embed_size, hidden_size)
         self.ffn = torch.nn.Linear(hidden_size, hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
