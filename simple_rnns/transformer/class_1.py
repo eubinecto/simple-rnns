@@ -9,15 +9,18 @@ from torch.nn import functional as F
 
 
 # 신경망
-class SelfAttentionLayer(torch.nn.Module):
+class MultiHeadSelfAttentionLayer(torch.nn.Module):
 
-    def __init__(self, embed_size: int, hidden_size: int):
+    def __init__(self, embed_size: int, hidden_size: int, heads: int):
         super().__init__()
         self.embed_size = embed_size
         self.hidden_size = hidden_size
+        self.heads = heads
         self.W_q = torch.nn.Linear(embed_size, hidden_size)
         self.W_k = torch.nn.Linear(embed_size, hidden_size)
         self.W_v = torch.nn.Linear(embed_size, hidden_size)
+        # 학습해야하는 가중치 - 새로운 가중치가 필요.
+        self.W_o = torch.nn.Linear(..., ...)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
         """
@@ -30,27 +33,43 @@ class SelfAttentionLayer(torch.nn.Module):
         # (E, H)를 배치차원만큼, 즉 N만큼 복사를 한다.
         # (E, H) -> (N, E, H)
         # (N, L, E) * (N, E, H) -> (N, L, H)
-        K = self.W_k(X_embed)
-        V = self.W_v(X_embed)
+        K = self.W_k(X_embed)  # (N, L, E) * (E, H) -> (N, L, H)
+        V = self.W_v(X_embed)  # (N, L, E) * (E, H) -> (N, L, H)
+        # (N, L, H); N*L*H -> (N, heads, L, H / heads); N * heads * L * H / heads
         # 이제는 뭘해야되죠?
+        N, L, H = Q.size()
+        assert H % self.heads == 0
+        Q = Q.reshape(N, self.heads, L, H // self.heads)  # # (N, L, H); N*L*H -> (N, heads, L, H / heads); N * heads * L * H / heads
+        K = K.reshape(N, self.heads, L, H // self.heads)  # # (N, L, H); N*L*H -> (N, heads, L, H / heads); N * heads * L * H / heads
+        V = V.reshape(N, self.heads, L, H // self.heads)  # (N, L, H); N*L*H -> (N, heads, L, H / heads); N * heads * L * H / heads
         # Q 와 K 사이의 유사도를 구한다.
         Q = Q / np.sqrt(self.hidden_size)
         K = K / np.sqrt(self.hidden_size)
-        Out_ = torch.einsum("nah,nbh->nab", Q, K)  # (N, L, H) * (N, L, H) -> (N, L, L)
+        # Out_ = torch.einsum("nah,nbh->nab", Q, K)  # (N, L, H) * (N, L, H) -> (N, L, L)
+        # einsum 을 어떻게 바꿔야할까?
+        # heads = e
+        # H / heads = x
+        Out_ = torch.einsum("neax,nebx->neab", Q, K)  # (N, heads, L, H / heads); * (N, heads, L, H / heads) -> (N, heads, L, L)
         # 이제는 뭘하죠?
         # d_k = H
         # Out_ = Out_ / np.sqrt(self.hidden_size)  # 이러면 논리적인 오류가 있다. (소 잃고 외양간 고치는 격)
         # 이 다음에는 확률분포로 만든다
-        Out_ = torch.softmax(Out_, dim=1)  # (N, L, L)
+        # Out_ = torch.softmax(Out_, dim=1)  # (N, L, L)
+        # Out_ = torch.softmax(Out_, dim=2)  # (N, L, L)
+        Out_ = torch.softmax(Out_, dim=2)  # (N, heads, L, L)
+        # Out_ = torch.softmax(Out_, dim=3)  # (N, heads, L, L)
         # 이 다음에는?
-        Out = torch.einsum("nll,nlh->nlh", Out_, V)  # (N, L, L) * (N, L, H) -> (N, L, H)
+        # Out = torch.einsum("nll,nlh->nlh", Out_, V)   # (N, L, L) * (N, L, H) -> (N, L, H)
+        Heads = torch.einsum("...", Out_, V)  # (N, heads, L, L) * (N, heads, L, H / heads) -> (N, heads, L, H / heads)
+        # concat을 해서, 각 head를 이어붙이기.
+        Out = Heads.reshape(N, L, H)  # (N, heads, L, H / heads) -> (N, L, H)
         return Out
 
 
 class EncoderLayer(torch.nn.Module):
     def __init__(self, embed_size: int,  hidden_size: int):
         super().__init__()
-        self.self_attention_layer = SelfAttentionLayer(embed_size, hidden_size)
+        self.self_attention_layer = MultiHeadSelfAttentionLayer(embed_size, hidden_size)
         self.ff_layer = torch.nn.Linear(hidden_size, hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
