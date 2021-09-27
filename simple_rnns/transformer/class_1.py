@@ -60,7 +60,7 @@ class MultiHeadSelfAttentionLayer(torch.nn.Module):
         # Out_ = torch.softmax(Out_, dim=3)  # (N, heads, L, L)
         # 이 다음에는?
         # Out = torch.einsum("nll,nlh->nlh", Out_, V)   # (N, L, L) * (N, L, H) -> (N, L, H)
-        Heads = torch.einsum("...", Out_, V)  # (N, heads, L, L) * (N, heads, L, H / heads) -> (N, heads, L, H / heads)
+        Heads = torch.einsum("nell,nelx->nelx", Out_, V)  # (N, heads, L, L) * (N, heads, L, H / heads) -> (N, heads, L, H / heads)
         # concat을 해서, 각 head를 이어붙이기.
         Out = Heads.reshape(N, L, H)  # (N, heads, L, H / heads) -> (N, L, H)
         return Out
