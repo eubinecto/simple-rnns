@@ -46,9 +46,12 @@ class MultiHeadSelfAttentionLayer(torch.nn.Module):
         # scale by sqrt H
         # Out_ = Out_ / np.sqrt(self.hidden_size)  # 왜 실수? 논리적인 오류. - 소 잃고 외양간 고치는 격.
         Out_ = torch.softmax(Out_, dim=2)  #  (N ,heads, ?=L, ?=L)
+        Out_ = torch.einsum("neab,neax->neax", Out_, V)  # (N ,heads, ?=L, ?=L), (N,  heads, L,  H / heads) -> (N,  heads, L,  H / heads)
+        # Out_ = torch.softmax(Out_, dim=3)  # (N ,heads, ?=L, ?=L)
+        # Out_ = torch.einsum("neab,nebx->nebx", Out_, V)  # (N ,heads, ?=L, ?=L), (N,  heads, L,  H / heads) -> (N,  heads, L,  H / heads)
+
         # Out_ = torch.softmax(Out_, dim=3)  #  (N ,heads, ?=L, ?=L) - 이것도 맞음.
         # softmax() * V
-        Out_ = torch.einsum("nell,nelx->nelx", Out_, V)  # (N ,heads, ?=L, ?=L), (N,  heads, L,  H / heads) -> (N,  heads, L,  H / heads)
         Out_ = Out_.reshape(N, L, H)  # (N,  heads, L,  H / heads) ->  (N, L , H / heads * heads=H)
         # "jointly learning"
         Out = self.W_o(Out_)  # (N, L, H) * (?=H, ?=H) -> (N, L, H)
