@@ -69,7 +69,8 @@ class SelfAttentionLayer(torch.nn.Module):
 
 
 class Transformer(torch.nn.Module):
-    pass
+    def __init__(self):
+        self.embeddings = torch.nn.Embedding()
 
 
 
