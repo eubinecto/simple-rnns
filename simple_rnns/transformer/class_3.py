@@ -60,10 +60,12 @@ class MultiHeadSelfAttentionLayer(torch.nn.Module):
 
 class EncoderBlock(torch.nn.Module):
 
-    def __init__(self, hidden_size: int):
+    def __init__(self, embed_size: int, hidden_size: int, heads: int):
         super().__init__()
-        self.sa = MultiHeadSelfAttentionLayer()
+        self.sa = MultiHeadSelfAttentionLayer(embed_size, hidden_size, heads)
+        self.layer_norm_1 = torch.nn.LayerNorm(hidden_size)
         self.ffn = torch.nn.Linear(hidden_size, hidden_size)
+        self.layer_norm_2 = torch.nn.LayerNorm(hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
         """
@@ -71,8 +73,10 @@ class EncoderBlock(torch.nn.Module):
         :return:
         """
         # 1. self-attention을 통과했을 떄, 어떤 차원의 행렬이 나와야하나?
-        Out = self.sa(X_embed) + X_embed  # (N, L, E) -> (N, L, H)
-        Out = self.ffn(Out) + Out  # (N, L, H) * (???) - (N, L, H)
+        Out_ = self.sa(X_embed) + X_embed  # (N, L, E) -> (N, L, H)
+        Out_ = self.layer_norm_1(Out_)  # 특정 평균 or 분산에 치우친 분포를 이상적인 분포로 scale
+        Out = self.ffn(Out_) + Out_  # (N, L, H) * (???) - (N, L, H)
+        Out_ = self.layer_norm_2(Out_)
         return Out
 
 

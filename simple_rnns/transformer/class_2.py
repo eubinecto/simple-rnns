@@ -79,9 +79,9 @@ class EncoderBlock(torch.nn.Module):
         :param X_embed: (N, L, E)
         :return: (N, L, E)
         """
-        Out = self.sa(X_embed)  # (N, L, E) -> (N, L, E)
+        Out = self.sa(X_embed) + X_embed  # (N, L, E) -> (N, L, E)
         # L, E * E, E -> L, E.
-        Out = self.ffn(Out)  # (N, L, E) * (?=E,?=E) -> (N, L, E)
+        Out = self.ffn(Out) + Out  # (N, L, E) * (?=E,?=E) -> (N, L, E)
         return Out
 
 
