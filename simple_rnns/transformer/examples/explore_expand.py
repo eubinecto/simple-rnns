@@ -2,12 +2,13 @@ import torch
 
 
 def main():
-    X = torch.randint(high=29, size=(10, 30))  # (N, L)
-    X_pos = torch.arange(X.shape[1]).expand(X.shape[0],  X.shape[1])  # (N, L) -> (N, L)
-    pos_embeddings = torch.nn.Embedding(num_embeddings=X.shape[1], embedding_dim=512)
-    X_pos = pos_embeddings(X_pos)
-    print(X_pos.shape)
-    print(X_pos)
+    max_length = 30
+    indices = torch.arange(30)
+    print(indices)  # (1, L)
+    # (1, L) -> (N, L)
+    N = 10
+    print(indices.expand(10, max_length))
+    # print(indices.reshape(10, max_length))  # 이건 재배치 용도, 그래서 이 코드는 오류
 
 
 if __name__ == '__main__':

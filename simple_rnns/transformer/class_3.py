@@ -84,29 +84,35 @@ class Transformer(torch.nn.Module):
     """
     Transformer for classifying sequences
     """
-    def __init__(self, vocab_size: int, embed_size: int, depth: int):
+    def __init__(self, vocab_size: int, embed_size: int,  hidden_size: int, heads: int, depth: int, max_length: int):
         """
         :param vocab_size: V
         :param embed_size: E
         """
         super().__init__()
         # 가중치를 정의하는 곳.
-        self.embeddings = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
+        self.max_length = max_length
+        self.token_embeddings = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
+        # 위치 정보의 경우 - 몇개의 임베딩을 학습? - 문장의 최대길이 만큼.
+        self.pos_embeddings = torch.nn.Embedding(num_embeddings=max_length, embedding_dim=embed_size)  # 일단 스킵.
         # 여러 개 레이어의 나열을 하나의 레이어로 정의하는 방법
         # list of torch.nn.Module
         self.blocks = torch.nn.Sequential(
-            *[EncoderBlock() for _ in range(depth)]
+            *[EncoderBlock(embed_size, hidden_size, heads) for _ in range(depth)]
         )
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
         :param X:  (N, L)
-        :return:
+        :return: (N, L, H)
         """
-        X_embed = self.embeddings(X)  # (N, L) -> (N, L, E)
-        Out = self.blocks(X_embed)
-        ...
-
+        X_embed = self.token_embeddings(X)  # (N, L) -> (N, L, E)
+        # torch.arange()
+        # max_length = L.
+        X_pos = self.pos_embeddings(torch.arange(self.max_length).expand(X.shape[0], self.max_length))  # (N, L) -> (N, L, ?)
+        Input = X_embed + X_pos  # (N, L, E) + (N, L, ?=E)
+        Out = self.blocks(Input)  # (N, L, E) -> (N, L, H)
+        return Out
 
     def training_step(self, X: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         pass
