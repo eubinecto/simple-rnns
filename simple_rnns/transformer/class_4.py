@@ -67,11 +67,50 @@ class SelfAttentionLayer(torch.nn.Module):
         return Out
 
 
+class EncoderLayer(torch.nn.Module):
+    def __init__(self, embed_size: int, hidden_size: int):
+        super().__init__()
+        # 인코더 레이어에는 학습해야하는 가중치 (신경망)이
+        # 무엇이 있나?
+        self.sa = SelfAttentionLayer(embed_size, hidden_size)
+        self.norm_1 = torch.nn.LayerNorm(hidden_size)
+        self.ffn = torch.nn.Linear(..., ...)
+        self.norm_2 = torch.nn.LayerNorm(hidden_size)
+
+    def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
+        """
+        :param X_embed : (N, L, E)
+        :return:
+        """
+        # 출력  +"add" + 입력
+        # 대철님 -  feedforward + add norm 부분이 residual인가요?
+        # 네 맞습니다!
+        Out_ = self.sa(X_embed) + X_embed
+        Out_ = self.norm_1(Out_)
+        Out_ = self.ffn(Out_) + Out_
+        Out_ = self.norm_2(Out_)
+        return Out_
+
 
 class Transformer(torch.nn.Module):
-    def __init__(self):
-        self.embeddings = torch.nn.Embedding()
+    def __init__(self, vocab_size: int, embed_size: int,  hidden_size: int, depth: int):
+        super().__init__()
+        self.token_embeddings = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
+        # self.encoder_layer = EncoderLayer(embed_size, hidden_size)
+        # # 인코더 레이어를 어떻게 더 쌓을 수 있을까?
+        # self.encoder_layer_2 = EncoderLayer(embed_size, hidden_size)
+        # # torch.nn.Sequential이라는 함수를 사용.
+        self.encoders = torch.nn.Sequential(
+            *[EncoderLayer(embed_size, hidden_size) for _ in range(depth)]
+        )
 
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        """
+        :param X: (N, L)
+        :return:
+        """
+        X_embed = self.token_embeddings(X)  # (N, L) -> (N, L, E)
+        Out_ = self.encoders(X_embed)  # (N, L, E) -> (???)
 
 
 def main():
