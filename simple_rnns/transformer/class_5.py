@@ -54,6 +54,7 @@ class SelfAttentionLayer(torch.nn.Module):
         # batched matrix multiplication
         Q /= np.sqrt(self.hidden_size)
         K /= np.sqrt(self.hidden_size)
+        # Out_ = Q @ K.reshape(K.shape[0], K.shape[2], K.shape[1])
         Out_ = torch.einsum("nah,nbh->nab", Q, K)  # (N, L, H), (N, L, H) ->  (N, L, H)  * (N, H, L)  -> (N, L, L)
         # 다음으로는 뭘해야하나? -> 스케일링
         # Out_ = Out_ / np.sqrt(self.hidden_size)  # 여기에는 논리적인 오류가 있다. 소 잃고 외양간 고치는 격.

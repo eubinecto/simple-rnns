@@ -1,17 +1,20 @@
-
+import numpy as np
 import torch
 from typing import List, Tuple
 from keras_preprocessing.sequence import pad_sequences
 from keras_preprocessing.text import Tokenizer
 
 
-class SelfAttention(torch.nn.Module):
-    def __init__(self, embed_size: int, hidden_size: int):
+class MultiHeadSelfAttentionLayer(torch.nn.Module):
+    def __init__(self, embed_size: int, hidden_size: int, heads: int):
         super().__init__()
         self.hidden_size = hidden_size
+        self.heads = heads
         self.W_q = torch.nn.Linear(embed_size, hidden_size)
         self.W_k = torch.nn.Linear(embed_size, hidden_size)
         self.W_v = torch.nn.Linear(embed_size, hidden_size)
+        # multihead attention의 경우 - 학습해야하는 가중치가 더 있나요?
+        self.W_o = torch.nn.Linear(hidden_size, hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
         """
@@ -22,13 +25,43 @@ class SelfAttention(torch.nn.Module):
         Q = self.W_q(X_embed)  # (N, L, E) * (?=E,?=H) -> (N, L, H)
         K = self.W_k(X_embed)  # (N, L, E) * (?=E,?=H) -> (N, L, H)
         V = self.W_v(X_embed)  # (N, L, E) * (?=E,?=H) -> (N, L, H)
+        # 이제 뭘해야할까...
+        # H를 heads가 사이좋게 나눠쓰도록 하면 된다.
+        N, L, H = Q.size()
+        # 새로운 차원을 추가해야한다. - heads 차원.
+        Q = Q.reshape(N, self.heads, L, H / self.heads)  # (N, L, H) -> (N, heads, L, H / heads)
+        K = K.reshape(N, self.heads, L, H / self.heads)  # (N, L, H) -> (N, heads, L, H / heads)
+        V = K.reshape(N, self.heads, L, H / self.heads)  # (N, L, H) -> (N, heads, L, H / heads)
         # 이 다음엔 뭘하죠?
         # Q와 K의 내적.
-        Out = torch.einsum("nah,nbh->nab", Q, K)  # 단어와 단어사이의 관계. -> (N, L, L)
-        Out = Out / torch.sqrt(Out.shape[2])  # 매우 크거나 매우 작은수가 나올 확률을 줄여주는 것.
-        Out = torch.softmax(Out, dim=1)  # [0, 1]사이로  정규화
-        H_attn = torch.einsum("nll,nlh->nlh", Out, V)  # Out(N, L, L), V(N, L, H)  -> (N, L, H)
-        return H_attn
+        Q /= np.sqrt(self.hidden_size)
+        K /= np.sqrt(self.hidden_size)
+        # 영성님 - 왜 각각 적용시켜야 하는건가요?
+        # Q ~ (0, 1)
+        # K ~ (0, 1)
+        # Q * K^T ~ (0, d_k)
+        # Q * K^T  scale -> ~ (0, 1)
+        # 그렇다면,
+        # Q scale -> Q ~ (0,  1 / d_k)
+        # K scale -> K ~ (0,  1 / d_k)
+        # Q * K^T ~ (0, 1)
+        # 단어와 단어사이의 관계. (N, L, H), (N, L, H) -> (N, L, H) * (N, H, L) -> (N, L, L)
+        # Out_ = torch.einsum("nah,nbh->nab", Q, K)
+        # heads = e
+        # H / heads = x
+        Out_ = torch.einsum("neax,nebx->neab", Q, K)  # (..., ..., L, H / heads), (... ..., L, H / heads) -> (..., ..., L, H / heads) * (... ..., H / heads, L) -> ( ..., ..., L ,L)
+        # Out_ = Out_ / np.sqrt(self.hidden_size)  # 매우 크거나 매우 작은수가 나올 확률을 줄여주는 것. - 소 잃고 외양간 고치는 오류.
+        # Out_ = torch.softmax(Out_, dim=1)  # [0, 1]사이로  정규화   # (N, L, L)
+        Out_ = torch.softmax(Out_, dim=2)  # [0, 1]사이로  정규화  # (N, heads, L, L)
+        # Out = torch.einsum("nll,nlh->nlh", Out_, V)  # Out(N, L, L), V(N, L, H)  -> (N, L, H)
+        Out_ = torch.einsum("nell,nelx->nelx", Out_, V)  # (..., ..., L, L) * (..., ..., L, H / heads) -> (..., ...,  L, H / heads)
+        # 이제 뭘하죠?
+        # concat
+        # Out = torch.cat(Out_[:, :], dim=1)
+        Out_ = Out_.reshape(N, L, self.hidden_size)  # (N, heads,  L, H / heads) -> (N, L, H)
+        # 끝?
+        Out = self.W_o(Out_)  # (N, L, H) * (?=H, ?=H) -> (N, L, H)
+        return Out
 
 
 class EncoderBlock(torch.nn.Module):
@@ -38,7 +71,7 @@ class EncoderBlock(torch.nn.Module):
         # 학습해야하는 가중치?
         # 영성님 - self_attention
         # position-wise FFN
-        self.sa = SelfAttention(embed_size=embed_size, hidden_size=embed_size)
+        self.sa = MultiHeadSelfAttentionLayer(embed_size=embed_size, hidden_size=embed_size)
         self.ffn = torch.nn.Linear(in_features=embed_size, out_features=embed_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
