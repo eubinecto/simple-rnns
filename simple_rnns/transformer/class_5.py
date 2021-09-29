@@ -13,6 +13,7 @@ class MultiHeadSelfAttentionLayer(torch.nn.Module):
         # 학습하는 해야하는 가중치???
         self.heads = heads
         self.hidden_size = hidden_size
+        assert hidden_size % self.heads == 0
         self.W_q = torch.nn.Linear(embed_size, hidden_size)
         self.W_k = torch.nn.Linear(embed_size, hidden_size)
         self.W_v = torch.nn.Linear(embed_size, hidden_size)
@@ -80,6 +81,36 @@ class MultiHeadSelfAttentionLayer(torch.nn.Module):
         # Out = torch.einsum("nll,nlh->nlh", Out_, V)  # (N, L, L) * (N, L,H) -> (N, L , H)
         Out = torch.einsum("nell,nelx->nelx", Out_, V)  # (N, Heads, L, L) * (N, Heads, L, H / heads) -> (N, Heads, L, H / heads)
         return Out
+
+
+class EncoderLayer(torch.nn.Module):
+    def __init__(self, embed_size: int, hidden_size: int, heads: int):
+        super().__init__()
+        # 필요한 가중치 정의
+        # 어떤 신경망을 학습해야하나?
+        assert embed_size == hidden_size
+        self.mhsa = MultiHeadSelfAttentionLayer(embed_size, hidden_size, heads)
+        self.norm_1 = torch.nn.LayerNorm(hidden_size)
+        self.ffn = torch.nn.Linear(hidden_size, hidden_size)
+        self.norm_2 = torch.nn.LayerNorm(hidden_size)
+        # 또 학습해야하는 레이어?
+
+    def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
+        """
+        :param X_embed: (N, L, E)
+        :return: (N, L, H)
+        """
+        Out_ = self.mhsa(X_embed) + X_embed  # (N, L, E) -> (N, L, H). (N, L, H) + (N, L, E)
+        Out_ = self.norm_1(Out_)  #  (N, L, H)
+        Out_ = self.ffn(Out_) + Out_  #  (N, L, H) * (?=H, ?=H) -> (N, L, H)
+        Out = self.norm_2(Out_)
+        return Out
+
+
+# --- hyper parameters --- #
+EMBED_SIZE = 512
+HIDDEN_SIZE = 512
+
 
 
 def main():
