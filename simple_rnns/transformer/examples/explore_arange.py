@@ -3,8 +3,8 @@ import torch
 
 def main():
 
-    length = 10
-    print(torch.arange(10))
+    max_length = 30
+    print(torch.arange(max_length))
 
 
 if __name__ == '__main__':

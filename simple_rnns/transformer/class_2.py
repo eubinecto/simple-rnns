@@ -3,6 +3,7 @@ import torch
 from typing import List, Tuple
 from keras_preprocessing.sequence import pad_sequences
 from keras_preprocessing.text import Tokenizer
+from torch.nn import functional as F
 
 
 class MultiHeadSelfAttentionLayer(torch.nn.Module):
@@ -10,6 +11,7 @@ class MultiHeadSelfAttentionLayer(torch.nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
         self.heads = heads
+        assert hidden_size % heads == 0
         self.W_q = torch.nn.Linear(embed_size, hidden_size)
         self.W_k = torch.nn.Linear(embed_size, hidden_size)
         self.W_v = torch.nn.Linear(embed_size, hidden_size)
@@ -29,9 +31,9 @@ class MultiHeadSelfAttentionLayer(torch.nn.Module):
         # H를 heads가 사이좋게 나눠쓰도록 하면 된다.
         N, L, H = Q.size()
         # 새로운 차원을 추가해야한다. - heads 차원.
-        Q = Q.reshape(N, self.heads, L, H / self.heads)  # (N, L, H) -> (N, heads, L, H / heads)
-        K = K.reshape(N, self.heads, L, H / self.heads)  # (N, L, H) -> (N, heads, L, H / heads)
-        V = K.reshape(N, self.heads, L, H / self.heads)  # (N, L, H) -> (N, heads, L, H / heads)
+        Q = Q.reshape(N, self.heads, L, H // self.heads)  # (N, L, H) -> (N, heads, L, H / heads)
+        K = K.reshape(N, self.heads, L, H // self.heads)  # (N, L, H) -> (N, heads, L, H / heads)
+        V = V.reshape(N, self.heads, L, H // self.heads)  # (N, L, H) -> (N, heads, L, H / heads)
         # 이 다음엔 뭘하죠?
         # Q와 K의 내적.
         Q /= np.sqrt(self.hidden_size)
@@ -65,23 +67,27 @@ class MultiHeadSelfAttentionLayer(torch.nn.Module):
 
 
 class EncoderBlock(torch.nn.Module):
-    def __init__(self, embed_size: int):
+    def __init__(self, embed_size: int, hidden_size: int, heads: int):
         super().__init__()
         self.embed_size = embed_size
         # 학습해야하는 가중치?
         # 영성님 - self_attention
         # position-wise FFN
-        self.sa = MultiHeadSelfAttentionLayer(embed_size=embed_size, hidden_size=embed_size)
+        self.sa = MultiHeadSelfAttentionLayer(embed_size=embed_size, hidden_size=hidden_size, heads=heads)
+        self.norm_1 = torch.nn.LayerNorm(hidden_size)
         self.ffn = torch.nn.Linear(in_features=embed_size, out_features=embed_size)
+        self.norm_2 = torch.nn.LayerNorm(hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
         """
         :param X_embed: (N, L, E)
         :return: (N, L, E)
         """
-        Out = self.sa(X_embed) + X_embed  # (N, L, E) -> (N, L, E)
+        Out_ = self.sa(X_embed) + X_embed  # (N, L, E) -> (N, L, E)
+        Out_ = self.norm_1(Out_)
         # L, E * E, E -> L, E.
-        Out = self.ffn(Out) + Out  # (N, L, E) * (?=E,?=E) -> (N, L, E)
+        Out_ = self.ffn(Out_) + Out_  # (N, L, E) * (?=E,?=E) -> (N, L, E)
+        Out = self.norm_2(Out_)
         return Out
 
 
@@ -89,16 +95,19 @@ class Transformer(torch.nn.Module):
     # 1. 신경망 속에 학습해야하는 가중치를 정의하는 메소드.
     # 2. 신경망의 출력을 계산하는 메소드.
     # 3. 신경망의 로스를 계산하는 메소드.
-    def __init__(self, vocab_size: int, embed_size: int, depth: int):
+    def __init__(self, vocab_size: int, embed_size: int, hidden_size: int, depth: int, max_length: int, heads: int):
         super().__init__()
         self.vocab_size = vocab_size
+        self.max_length = max_length
         # --- 가중치를 정의하는 곳 --- #
         # 임베딩 테이블 정의
         self.token_embeddings = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
+        self.pos_embeddings = torch.nn.Embedding(num_embeddings=max_length, embedding_dim=embed_size)
         # 인코더 레이어 정의
         self.blocks = torch.nn.Sequential(
-            *[EncoderBlock(embed_size) for _ in range(depth)]
+            *[EncoderBlock(embed_size, hidden_size, heads) for _ in range(depth)]
         )
+        self.W_hy = torch.nn.Linear(hidden_size, 1)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
@@ -108,20 +117,27 @@ class Transformer(torch.nn.Module):
         # 정수인코딩 -> 임베딩.
         X_embed = self.token_embeddings(X)  # (N, L) -> (N, L, E)
         # torch.nn.Sequential로 정의를 했기 때문에, blocks를 레이어 취급할 수 있다.
-        H_all = self.blocks(X_embed)  # (N, L, E) -> (N, L, E)
-        pass
+        # [1 , 512, 5, 43]
+        # [0,   1,  2,  3]
+        # [[...], [...], [...], [...]]
+        X_pos = self.pos_embeddings(torch.arange(self.max_length).expand(X.shape[0], self.max_length))  # (N, L)  -> (N, L, E)
+        H_all = self.blocks(X_embed + X_pos)  # (N, L, E) -> (N, L, E)
+        return H_all
+
+    def predict(self, H_all: torch.Tensor) -> torch.Tensor:
+        H_avg = H_all.mean(dim=1)  # (N, L,H) -> (N, H)
+        y_pred = self.W_hy(H_avg)  # (N, H) * (?, ?) -> (N, 1)
+        return torch.sigmoid(y_pred)
 
     def training_step(self, X: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        loss: torch.Tensor = ...
-        return loss
+        H_all = self.forward(X)  # (N, L) -> (N, L, H)
+        y_pred = self.predict(H_all)  # (N, L, H) -> (N,)
+        y_pred = y_pred.reshape(y.shape)
+        loss = F.binary_cross_entropy(y_pred, y)
+        return loss.sum()
 
 
-EPOCHS = 50
-EMBED_SIZE = 512
-MAX_LENGTH = 30
-NUM_HEADS = 10
-DEPTH = 3
-LR = 0.0001
+
 
 DATA: List[Tuple[str, int]] = [
     # 긍정적인 문장 - 1
@@ -229,8 +245,19 @@ class Analyser:
 
     def __call__(self, text: str) -> float:
         X = build_X(sents=[text], tokenizer=self.tokenizer, max_length=self.max_length)
-        y_pred = self.transformer.forward(X)
+        H_all = self.transformer.forward(X)
+        y_pred = self.transformer.predict(H_all)
         return y_pred.item()
+
+
+EPOCHS = 100
+HIDDEN_SIZE = 512
+EMBED_SIZE = 512
+MAX_LENGTH = 30
+NUM_HEADS = 8
+DEPTH = 3
+LR = 0.0001
+
 
 
 def main():
@@ -247,17 +274,18 @@ def main():
 
     vocab_size = len(tokenizer.word_index.keys())
     vocab_size += 1
-    # lstm 으로 감성분석 문제를 풀기.
-    lstm = Transformer(embed_size=EMBED_SIZE, vocab_size=vocab_size, num_heads=NUM_HEADS, depth=DEPTH, max_length=MAX_LENGTH)
-    optimizer = torch.optim.Adam(params=lstm.parameters(), lr=LR)
+    # transformer 으로 감성분석 문제를 풀기.
+    transformer = Transformer(embed_size=EMBED_SIZE,  hidden_size=HIDDEN_SIZE, vocab_size=vocab_size,
+                       heads=NUM_HEADS, depth=DEPTH, max_length=MAX_LENGTH)
+    optimizer = torch.optim.Adam(params=transformer.parameters(), lr=LR)
     for epoch in range(EPOCHS):
-        loss = lstm.training_step(X, y)
+        loss = transformer.training_step(X, y)
         loss.backward()  # 오차 역전파
         optimizer.step()  # 경사도 하강
         optimizer.zero_grad()  # 다음 에폭에서 기울기가 축적이 되지 않도록 리셋
         print(epoch, "-->", loss.item())
 
-    analyser = Analyser(lstm, tokenizer, MAX_LENGTH)
+    analyser = Analyser(transformer, tokenizer, MAX_LENGTH)
     print("##### TEST #####")
     for sent in TESTS:
         print(sent, "->", analyser(sent))
