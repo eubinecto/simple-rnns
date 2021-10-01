@@ -20,7 +20,7 @@ class MultiHeadSelfAttentionLayer(torch.nn.Module):
         self.W_k = torch.nn.Linear(embed_size, hidden_size)
         self.W_v = torch.nn.Linear(embed_size, hidden_size)
         # 학습해야하는 가중치 - 새로운 가중치가 필요.
-        self.W_o = torch.nn.Linear(..., ...)
+        self.W_o = torch.nn.Linear(hidden_size, hidden_size)
 
     def forward(self, X_embed: torch.Tensor) -> torch.Tensor:
         """
@@ -62,14 +62,15 @@ class MultiHeadSelfAttentionLayer(torch.nn.Module):
         # Out = torch.einsum("nll,nlh->nlh", Out_, V)   # (N, L, L) * (N, L, H) -> (N, L, H)
         Heads = torch.einsum("nell,nelx->nelx", Out_, V)  # (N, heads, L, L) * (N, heads, L, H / heads) -> (N, heads, L, H / heads)
         # concat을 해서, 각 head를 이어붙이기.
-        Out = Heads.reshape(N, L, H)  # (N, heads, L, H / heads) -> (N, L, H)
+        Out_ = Heads.reshape(N, L, H)  # (N, heads, L, H / heads) -> (N, L, H)
+        Out = self.W_o(Out_)
         return Out
 
 
 class EncoderLayer(torch.nn.Module):
-    def __init__(self, embed_size: int,  hidden_size: int):
+    def __init__(self, embed_size: int,  hidden_size: int, heads: int):
         super().__init__()
-        self.multi_head_self_attention_layer = MultiHeadSelfAttentionLayer(embed_size, hidden_size)
+        self.multi_head_self_attention_layer = MultiHeadSelfAttentionLayer(embed_size, hidden_size, heads)
         self.ff_layer = torch.nn.Linear(hidden_size, hidden_size)
         self.norm_1 = torch.nn.LayerNorm(normalized_shape=hidden_size)
         self.norm_2 = torch.nn.LayerNorm(normalized_shape=hidden_size)
@@ -84,20 +85,23 @@ class EncoderLayer(torch.nn.Module):
         # 이제 뭐하죠?
         Out_ = self.norm_1(Out_)  # (N, L, H) -> (N, L, H)
         Out = self.ff_layer(Out_) + Out_  # (N, L, H) * (?=H,?=H) -> (N, L, H)
-        Out_ = self.norm_2(Out_) # (N, L, H) -> (N, L, H)
+        Out_ = self.norm_2(Out_)  # (N, L, H) -> (N, L, H)
         return Out
 
 
 class Transformer(torch.nn.Module):
 
-    def __init__(self, vocab_size: int, embed_size: int,  hidden_size, depth: int):
+    def __init__(self, vocab_size: int, embed_size: int,  hidden_size, depth: int, heads: int, max_length: int):
         super().__init__()
         # 학습해야하는 가중치를 정의하는 곳
-        self.embeddings = torch.nn.Embedding(num_embeddings=vocab_size,  embedding_dim=embed_size)
+        self.max_length = max_length
+        self.token_embeddings = torch.nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size)
+        self.pos_embeddings = torch.nn.Embedding(num_embeddings=max_length, embedding_dim=embed_size)
         # self.encoder_layer = EncoderLayer(embed_size, hidden_size)
         self.encoder = torch.nn.Sequential(
-            *[EncoderLayer(embed_size, hidden_size) for _ in range(depth)]
+            *[EncoderLayer(embed_size, hidden_size, heads) for _ in range(depth)]
         )
+        self.W_hy = torch.nn.Linear(hidden_size, 1)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
@@ -106,12 +110,29 @@ class Transformer(torch.nn.Module):
         """
         # 이제 뭐하죠?
         # X의 임베딩.
-        X_embed = self.embeddings(X)  # (N, L) -> (N, L, E)
+        X_embed = self.token_embeddings(X)  # (N, L) -> (N, L, E)
+        # X는 정수 인코딩.
+        # 0 -> [... ]
+        # 1 -> [... ]
+        # 2 -> [...]
+        # X = [1, 563, 32, 1]
+        # 원하는 것 -> [0, 1,  2 , 3]
+        X_pos = self.pos_embeddings(torch.arange(self.max_length).expand(X.shape[0], self.max_length)) # (N, L) -> (N, L, E)
         # 그럼 이제 뭐해요?
-        Out_ = self.encoder(X_embed)  # (N, L, E) -> (N, L, H)
+        # 순서 정보가 없다. -> positional embedding이 필요하다.
+        H_all = self.encoder(X_embed + X_pos)  # (N, L, E) -> (N, L, H)
         # 그럼 이제 뭐하죠??
-        Out = ...
-        return Out
+        return H_all
+
+    def predict(self, H_all: torch.Tensor) -> torch.Tensor:
+        """
+        :param H_all:  (N, L, H)
+        :return: y_pred: (N, 1)
+        """
+        H_avg = H_all.mean(dim=1)  # (N, L, H) -> (N, H)
+        y_pred = self.W_hy(H_avg)  # (N, H) * (H, 1) -> (N, 1)
+        return torch.sigmoid(y_pred)
+
 
     def training_step(self, X: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """
@@ -120,18 +141,12 @@ class Transformer(torch.nn.Module):
         :return:
         """
         # 이제 뭐헤요??
-        Out = self.forward(X)
-        loss = ...
-        return loss
-
-
-# --- hyper parameters --- #
-EPOCHS = 50
-EMBED_SIZE = 512
-MAX_LENGTH = 30
-NUM_HEADS = 10
-DEPTH = 3
-LR = 0.0001
+        H_all = self.forward(X)  # (N, L, E) -> (N, L, H)
+        # 이걸 가지고 뭘해야할까?
+        y_pred = self.predict(H_all)
+        y_pred = y_pred.reshape(y.shape)
+        loss = F.binary_cross_entropy(y_pred, y)
+        return loss.sum()
 
 
 DATA: List[Tuple[str, int]] = [
@@ -240,10 +255,19 @@ class Analyser:
 
     def __call__(self, text: str) -> float:
         X = build_X(sents=[text], tokenizer=self.tokenizer, max_length=self.max_length)
-        y_pred = self.transformer.forward(X)
+        H_all = self.transformer.forward(X)
+        y_pred = self.transformer.predict(H_all)
         return y_pred.item()
 
 
+# --- hyper parameters --- #
+EPOCHS = 100
+EMBED_SIZE = 512
+HIDDEN_SIZE = 512
+MAX_LENGTH = 30
+NUM_HEADS = 8
+DEPTH = 3
+LR = 0.0001
 
 
 def main():
@@ -261,7 +285,7 @@ def main():
     vocab_size = len(tokenizer.word_index.keys())
     vocab_size += 1
     # transformer 으로 감성분석 문제를 풀기.
-    transformer = Transformer(embed_size=EMBED_SIZE, vocab_size=vocab_size, num_heads=NUM_HEADS, depth=DEPTH, max_length=MAX_LENGTH)
+    transformer = Transformer(embed_size=EMBED_SIZE, hidden_size=HIDDEN_SIZE, vocab_size=vocab_size, heads=NUM_HEADS, depth=DEPTH, max_length=MAX_LENGTH)
     optimizer = torch.optim.Adam(params=transformer.parameters(), lr=LR)
     for epoch in range(EPOCHS):
         loss = transformer.training_step(X, y)
